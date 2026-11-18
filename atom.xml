@@ -1,16 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
 <feed xmlns="http://www.w3.org/2005/Atom">
-  <title>sinolw</title>
-  <icon>http://example.com/icon.png</icon>
+  <title>PetitroL</title>
+  <icon>https://petitrol.github.io/icon.png</icon>
   
-  <link href="http://example.com/atom.xml" rel="self"/>
+  <link href="https://petitrol.github.io/atom.xml" rel="self"/>
   
-  <link href="http://example.com/"/>
+  <link href="https://petitrol.github.io/"/>
   <updated>2026-11-18T12:00:00.000Z</updated>
-  <id>http://example.com/</id>
+  <id>https://petitrol.github.io/</id>
   
   <author>
-    <name>lw</name>
+    <name>PetitroL</name>
     
   </author>
   
@@ -34,8 +34,8 @@
   
   <entry>
     <title>vue3 水平无缝轮播图</title>
-    <link href="http://example.com/2021/12/04/rotation/"/>
-    <id>http://example.com/2021/12/04/rotation/</id>
+    <link href="https://petitrol.github.io/2021/12/04/rotation/"/>
+    <id>https://petitrol.github.io/2021/12/04/rotation/</id>
     <published>2021-12-04T07:36:25.000Z</published>
     <updated>2021-12-05T10:06:24.474Z</updated>
     
@@ -47,14 +47,14 @@
     
     
     
-    <category term="vue3轮播图" scheme="http://example.com/tags/vue3%E8%BD%AE%E6%92%AD%E5%9B%BE/"/>
+    <category term="vue3轮播图" scheme="https://petitrol.github.io/tags/vue3%E8%BD%AE%E6%92%AD%E5%9B%BE/"/>
     
   </entry>
   
   <entry>
     <title>博客搭建以及博客美化</title>
-    <link href="http://example.com/2021/12/02/hello-world/"/>
-    <id>http://example.com/2021/12/02/hello-world/</id>
+    <link href="https://petitrol.github.io/2021/12/02/hello-world/"/>
+    <id>https://petitrol.github.io/2021/12/02/hello-world/</id>
     <published>2021-12-01T16:00:00.000Z</published>
     <updated>2021-12-05T10:06:50.420Z</updated>
     
@@ -67,7 +67,7 @@
     
     
     
-    <category term="博客搭建" scheme="http://example.com/tags/%E5%8D%9A%E5%AE%A2%E6%90%AD%E5%BB%BA/"/>
+    <category term="博客搭建" scheme="https://petitrol.github.io/tags/%E5%8D%9A%E5%AE%A2%E6%90%AD%E5%BB%BA/"/>
     
   </entry>
   
