@@ -2,7 +2,7 @@
 <search>
   <entry>
     <title>一场会议录音，怎么变成能直接交差的纪要</title>
-    <url>/2026/11/20/meetnotes/</url>
+    <url>/meetnotes/</url>
     <content><![CDATA[<p>「做过会议纪要工具」这句话放在简历上很安全，因为它听起来像是把录音丢给一个大模型就完了。真被追问三句就露馅：说话人是怎么分开的？纪要用的是原文还是模型改写？Word 是拿什么库导的？</p>
 <p>所以我把它做成了一个能真跑的完整链路：<strong>浏览器现场录音 → 切块转写 → 说话人分离 → 规则生成纪要 → 抽取待办 → 导出 Markdown / HTML / Word</strong>。全程在本地跑，不联网、不依赖大模型服务。</p>
 <p>源码仓库：<a href="https://github.com/PetitroL/meetnotes">PetitroL/meetnotes</a></p>
@@ -110,7 +110,7 @@ return zipStore(files);   // stored（不压缩）方式手写 ZIP，Word 完全
   </entry>
   <entry>
     <title>给简历做一次体检：JD × 简历匹配到底该怎么打分</title>
-    <url>/2026/11/20/jobfit/</url>
+    <url>/jobfit/</url>
     <content><![CDATA[<p>找工作最耗时间的不是投简历，是判断「这份 JD 值不值得我花半小时改一版简历」。招聘网站给的那个百分比只会告诉你「匹配 78%」，从来不告诉你差在哪、能不能补、怎么补。</p>
 <p>所以我做了 JobFit：把一份 JD 和一份简历放进去，得到 <strong>0-100 的匹配分、五个维度的扣分原因、以及每条都能直接复制到简历里的改法</strong>。不投递、不外发，简历不出本机。</p>
 <p>源码仓库：<a href="https://github.com/PetitroL/jobfit">PetitroL/jobfit</a></p>
