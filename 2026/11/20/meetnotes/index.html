@@ -1,0 +1,331 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1">
+
+
+
+  <title>
+    一场会议录音，怎么变成能直接交差的纪要 |
+    
+    PetitroL
+  </title>
+
+    <link rel="shortcut icon" href="/favicon.ico">
+    
+
+<link rel="stylesheet" href="/css/style.css">
+
+  
+  
+<link rel="stylesheet" href="/fancybox/jquery.fancybox.min.css">
+
+  
+  
+<script src="/js/pace.min.js"></script>
+
+<meta name="generator" content="Hexo 5.4.0"><link rel="alternate" href="/atom.xml" title="PetitroL" type="application/atom+xml">
+</head>
+
+<body>
+  <main class="content">
+    <section class="outer">
+  <article id="post-meetnotes" class="article article-type-post" itemscope
+  itemprop="blogPost" data-scroll-reveal>
+
+  <div class="article-inner">
+    
+    <header class="article-header">
+      
+
+<h1 class="article-title" itemprop="name">
+  一场会议录音，怎么变成能直接交差的纪要
+</h1>
+
+
+
+    </header>
+    
+
+    
+    <div class="article-meta">
+      <a href="/2026/11/20/meetnotes/" class="article-date">
+  <time datetime="2026-11-20T12:00:00.000Z" itemprop="datePublished">2026-11-20</time>
+</a>
+      
+    </div>
+    
+
+    
+    
+<div class="tocbot"></div>
+
+    
+
+    <div class="article-entry" itemprop="articleBody">
+
+<p>「做过会议纪要工具」这句话放在简历上很安全，因为它听起来像是把录音丢给一个大模型就完了。真被追问三句就露馅：说话人是怎么分开的？纪要用的是原文还是模型改写？Word 是拿什么库导的？</p>
+<p>所以我把它做成了一个能真跑的完整链路：<strong>浏览器现场录音 → 切块转写 → 说话人分离 → 规则生成纪要 → 抽取待办 → 导出 Markdown / HTML / Word</strong>。全程在本地跑，不联网、不依赖大模型服务。</p>
+<p>源码仓库：<a href="https://github.com/PetitroL/meetnotes">PetitroL/meetnotes</a></p>
+<p><img src="/images/meetnotes/ui-detail.png" alt="会议详情：左侧会议列表、中间逐字稿、右侧纪要/待办/导出"></p>
+<span id="more"></span>
+
+<h2 id="why"><a href="#why" class="headerlink" title="why"></a>真正想解决的问题</h2>
+<p>开完会最烦的不是开会，是会后的半小时：把录音听完一遍、把谁说了什么记下来、把「下周把接口文档补齐」这种话从一堆闲聊里挑出来、再排成一份能发给领导的文档。</p>
+<p>这件事的难点不在「转成文字」，而在<strong>把非结构化的口水话变成结构化的交付物</strong>。所以我把整个流程拆成了几个彼此独立、每一步都能单独验证的环节，而不是一条黑箱流水线。</p>
+
+<h2 id="run"><a href="#run" class="headerlink" title="run"></a>三步跑起来</h2>
+<pre><code class="language-bash">npm install
+npm run build
+npm start          # http://localhost:5182
+</code></pre>
+<p>进去之后有三种开场：拖音频文件（mp3 / wav / m4a / webm，前端自动转 16k 单声道）、<strong>浏览器直接录</strong>、或者一键生成一场「产品评审会」的示例会议。第三种是为了让整条链路能被验证——不用去找录音，也能看到逐字稿怎么一段段冒出来、纪要怎么生成。</p>
+<p><img src="/images/meetnotes/ui-home.png" alt="首页：新建会议与拖拽上传"></p>
+
+<h2 id="stream"><a href="#stream" class="headerlink" title="stream"></a>转写：切块推进 + SSE 逐段显示</h2>
+<p>音频按 8 秒（3 分钟以内）或 20 秒切块，逐段推进。后端每完成一段就往 SSE 通道推一条 <code>segment</code>，前端边收边渲染，每段都能点回音频的对应位置。</p>
+<p>事件设计成 <code>snapshot / status / log / segment / done / failed / updated</code> 七种：<code>snapshot</code> 让刷新页面能接上进度，<code>status</code> 推进度条，<code>segment</code> 增量上屏，<code>updated</code> 表示某段被改过需要同步。这样「边转边看」不是一个假动画，而是真的在接收数据。</p>
+
+<h2 id="speaker"><a href="#speaker" class="headerlink" title="speaker"></a>说话人：两档可选，默认不装懂</h2>
+<p>这是我最不想含糊的一块，所以做了两个模式，让用户自己选：</p>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>做法</th>
+<th>适合</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>编号模式</td>
+<td>按转写稿自带的轮次标 A/B/C，不做声学判断</td>
+<td>最稳，会议记录里本来就有轮次</td>
+</tr>
+<tr>
+<td>声纹分离</td>
+<td>真的从声音里分人：每块估基频，在对数音高轴上聚类</td>
+<td>拿到一段没有轮次信息的录音时</td>
+</tr>
+</tbody>
+</table>
+<p>声纹分离的实现是这样：对每个音频块做自相关估基频（音高），取 <code>log(pitch)</code> 做一维 k-means，<strong>k 不写死</strong>，而是 2 到 maxK 逐个试，用轮廓系数挑最好的那个：</p>
+<pre><code class="language-js">const values = voiced.map((c) =&gt; Math.log(c.features.pitch));
+for (let k = 2; k &lt;= maxK; k += 1) {
+  const assign = kmeans1D(values, k);
+  const score = silhouette1D(values, assign, k);   // 轮廓系数
+  if (score &gt; best.score) best = { k, score, assign };
+}
+// 分得不够清楚就老老实实按单人处理
+if (!best.assign || best.score &lt; 0.15) {
+  return { labels: chunks.map(() =&gt; &quot;A&quot;), note: `音色差异不够明显…` };
+}
+</code></pre>
+<p><strong>为什么只用一维的基频，不做多维特征？</strong> 因为音色差异最直接的体现就是基频，而音量、清浊度这些受麦克风距离和增益影响极大，塞进来反而会把同一个人拆成两簇。维度少，可解释，出错也出得明白。</p>
+<p>静音块沿用上一段的标签，最后再做一次平滑去抖——否则一段换气就会被切成两个人。分错了也没关系，界面上能直接给说话人改名（「A → 张工」），改完纪要、待办、导出全部同步。</p>
+<p>这条链路里我刻意留了一句提示：<code>音色差异不够明显（轮廓系数 0.32），按单人处理</code>。<strong>算不出三声明显的三个人，就承认算不出来，而不是硬分成三个。</strong></p>
+<p><img src="/images/meetnotes/ui-transcribing.png" alt="转写进行中：进度与逐段输出"></p>
+
+<h2 id="minutes"><a href="#minutes" class="headerlink" title="minutes"></a>纪要：规则生成，所以每句都能回溯原文</h2>
+<p>不用模型改写，全部按规则挑句，原因很实在：<strong>纪要一旦被改写，就没法回溯到「谁在哪一句说的」</strong>。而会议纪要里最要命的就是「这话我没说过」。</p>
+<ul>
+<li><strong>摘要 3-5 条</strong>：按决策词、动作词、数字/时间三类信号给句子打分，挑够分的，按原始顺序排列——不打乱时间线；</li>
+<li><strong>议题 2-3 组</strong>：用六类主题词表打分归组，同一句话不会被塞进两个议题；</li>
+<li><strong>决议 1 条</strong>：按决策强度排序取最高分，<strong>同分取靠后的那一句</strong>——会议尾声才是真正拍板的地方。</li>
+</ul>
+<p>每条摘要、每条待办都挂着原句的段落索引，点一下能跳到逐字稿对应位置。我觉得这比「看起来很智能」重要得多。</p>
+
+<h2 id="todo"><a href="#todo" class="headerlink" title="todo"></a>待办：抽不到就少写，不硬凑</h2>
+<p>从逐字稿里抽「谁、做什么、什么时候」，靠三样东西：动作词、人称/岗位、截止时间表达。「已经做完了」的句子会被排除掉，避免把已完成的事列成待办。</p>
+<p>关键是<strong>宁可少写也不瞎补</strong>：抽不到时间就只写人和事，抽不到人就只写事，绝不自作主张补一个「本周五」。手改过的待办会被标记，重新计算时不会被冲掉。</p>
+
+<h2 id="docx"><a href="#docx" class="headerlink" title="docx"></a>Word 导出：零依赖手写 OOXML</h2>
+<p>这里我没装任何库。因为 <code>.docx</code> 本质就是一个 ZIP，里面装 OOXML——那就自己拼：</p>
+<pre><code class="language-js">// docx = [Content_Types].xml + _rels/.rels + word/document.xml + styles.xml
+const files = [
+  { name: &quot;[Content_Types].xml&quot;, data: Buffer.from(CONTENT_TYPES, &quot;utf8&quot;) },
+  { name: &quot;_rels/.rels&quot;,        data: Buffer.from(ROOT_RELS, &quot;utf8&quot;) },
+  { name: &quot;word/document.xml&quot;, data: Buffer.from(renderDocument(title, blocks), &quot;utf8&quot;) },
+  { name: &quot;word/styles.xml&quot;,   data: Buffer.from(STYLES, &quot;utf8&quot;) },
+];
+return zipStore(files);   // stored（不压缩）方式手写 ZIP，Word 完全认
+</code></pre>
+<p>三种导出各有用途：<strong>Markdown</strong> 贴进文档 / 飞书，<strong>HTML</strong> 是单文件自包含的，双击就能看且逐字稿默认折叠，<strong>Word</strong> 交给要存档的同事。另外还做了一个「复制 Markdown 到剪贴板」，省得为一段文本去下载文件。</p>
+
+<h2 id="verify"><a href="#verify" class="headerlink" title="verify"></a>怎么证明它真能跑</h2>
+<pre><code class="language-bash">npm run smoke
+</code></pre>
+<p>这个脚本会自己起服务、建会、跑声纹转写、改名、改段落、待办增删改、再把三种导出逐个校验字节和 MIME，最后删会收尾。当前 <strong>42/42 通过</strong>。</p>
+<p>我现在的习惯是：每个项目都要有一条「一条命令跑完整个链路」的冒烟测试。它不是给别人看的，是给自己改代码时兜底的——尤其是这种多阶段、带异步推送的流程，手动点一遍太容易漏。</p>
+
+<h2 id="limits"><a href="#limits" class="headerlink" title="limits"></a>已知取舍</h2>
+<ul>
+<li>会议存在<strong>内存</strong>里，重启清空（音频文件还在磁盘上）。接数据库是下一步。</li>
+<li>逐段之间的延迟是刻意的，为了让「边转边出」这条链路真的成立，不是性能问题。</li>
+<li>声纹分离是<strong>音色聚类</strong>，不是声纹库身份识别。同一人音色变化大时会分错，所以界面允许随时改名。</li>
+<li>只做单声道 16k 分析，多声道在前端先降成单声道。</li>
+<li>要接真实 ASR，配 <code>ASR_ENDPOINT</code> 与 <code>ASR_API_KEY</code> 即可；没配时走内置演示稿，<code>/api/health</code> 里的 <code>asr</code> 字段会告诉你是哪种来源。</li>
+</ul>
+
+<h2 id="end"><a href="#end" class="headerlink" title="end"></a>一点体会</h2>
+<p>这类工具最容易被做成「看起来很智能、实际不敢用」。我的取舍是：<strong>每一处判断都留出处，每一处不确定都明说</strong>。说话人分不准就提示「按单人处理」，待办抽不到就少写，纪要不用模型改写所以能回溯。把这些说清楚，比做得花哨更能让人敢用。</p>
+
+    </div>
+    <footer class="article-footer">
+      <a data-url="https://petitrol.github.io/2026/11/20/meetnotes/" data-id="ckpetitrol0meetnotes0" class="article-share-link">
+        分享
+      </a>
+      
+
+    </footer>
+
+  </div>
+
+  
+  
+<nav class="article-nav">
+  
+  <a href="/2026/11/20/jobfit/" class="article-nav-link">
+    <strong class="article-nav-caption">后一篇</strong>
+    <div class="article-nav-title">给简历做一次体检：JD × 简历匹配该怎么打分</div>
+  </a>
+  
+  
+  <a href="/2026/11/18/ai-data-assistant/" class="article-nav-link">
+    <strong class="article-nav-caption">前一篇</strong>
+    <div class="article-nav-title">用 Vue3 + Node 做一个能真跑的 AI 对话式数据助手</div>
+  </a>
+  
+</nav>
+
+  
+
+  
+  
+  
+  
+  
+  
+  
+
+</article>
+</section>
+    <footer class="footer">
+  <div class="outer">
+    <div class="float-right">
+      <ul class="list-inline">
+  
+  <li><i class="fe fe-smile-alt"></i> <span id="busuanzi_value_site_uv"></span></li>
+  
+  <li><i class="fe fe-bookmark"></i> <span id="busuanzi_value_page_pv"></span></li>
+  
+</ul>
+    </div>
+    <ul class="list-inline">
+      <li>PetitroL &copy; 2021</li>
+      
+        <li>ZHWANGART</li>
+      
+      <li>Powered by <a href="http://hexo.io/" target="_blank">Hexo</a></li>
+      <li>theme  <a target="_blank" rel="noopener" href="https://github.com/zhwangart/hexo-theme-ocean">Ocean</a></li>
+    </ul>
+  </div>
+</footer>
+  </main>
+  <aside class="sidebar">
+    <button class="navbar-toggle"></button>
+<nav class="navbar">
+  
+  <div class="logo">
+    <a href="/"><img src="/images/logo-text.svg" alt="PetitroL"></a>
+  </div>
+  
+  <ul class="nav nav-main">
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/">主页</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link" href="/archives">归档</a>
+    </li>
+    
+    <li class="nav-item">
+      <a class="nav-item-link nav-item-search" title="搜索">
+        <i class="fe fe-search"></i>
+        搜索
+      </a>
+    </li>
+  </ul>
+</nav>
+<nav class="navbar navbar-bottom">
+  <ul class="nav">
+    <li class="nav-item">
+      <div class="totop" id="totop">
+  <i class="fe fe-rocket"></i>
+</div>
+    </li>
+    <li class="nav-item">
+      
+      <a class="nav-item-link" target="_blank" href="/atom.xml" title="RSS Feed">
+        <i class="fe fe-feed"></i>
+      </a>
+      
+    </li>
+  </ul>
+</nav>
+<div class="search-form-wrap">
+  <div class="local-search local-search-plugin">
+  <input type="search" id="local-search-input" class="local-search-input" placeholder="Search...">
+  <div id="local-search-result" class="local-search-result"></div>
+</div>
+</div>
+  </aside>
+  
+<script src="/js/jquery-2.0.3.min.js"></script>
+
+
+<script src="/js/jquery.justifiedGallery.min.js"></script>
+
+
+<script src="/js/lazyload.min.js"></script>
+
+
+<script src="/js/busuanzi-2.3.pure.min.js"></script>
+
+
+
+<script src="/fancybox/jquery.fancybox.min.js"></script>
+
+
+
+
+<script src="/js/copybtn.js"></script>
+
+
+
+
+<script src="/js/tocbot.min.js"></script>
+
+<script>
+  tocbot.init({
+    tocSelector: '.tocbot',
+    contentSelector: '.article-entry',
+    headingSelector: 'h1, h2, h3, h4, h5, h6',
+    hasInnerContainers: true,
+    scrollSmooth: true,
+    positionFixedSelector: '.tocbot',
+    positionFixedClass: 'is-position-fixed',
+    fixedSidebarOffset: 'auto',
+  });
+</script>
+
+
+
+<script src="/js/ocean.js"></script>
+
+<script src="/live2dw/lib/L2Dwidget.min.js?094cbace49a39548bed64abff5988b05"></script><script>L2Dwidget.init({"pluginRootPath":"live2dw/","pluginJsPath":"lib/","pluginModelPath":"assets/","tagMode":false,"debug":false,"model":{"jsonPath":"/live2dw/assets/koharu.model.json"},"display":{"position":"right","width":150,"height":300,"bottom":40,"hOffset":30,"vOffset":-30},"mobile":{"show":true},"log":false});</script></body>
+
+</html>

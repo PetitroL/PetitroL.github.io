@@ -1,6 +1,272 @@
 <?xml version="1.0" encoding="utf-8"?>
 <search>
   <entry>
+    <title>一场会议录音，怎么变成能直接交差的纪要</title>
+    <url>/2026/11/20/meetnotes/</url>
+    <content><![CDATA[<p>「做过会议纪要工具」这句话放在简历上很安全，因为它听起来像是把录音丢给一个大模型就完了。真被追问三句就露馅：说话人是怎么分开的？纪要用的是原文还是模型改写？Word 是拿什么库导的？</p>
+<p>所以我把它做成了一个能真跑的完整链路：<strong>浏览器现场录音 → 切块转写 → 说话人分离 → 规则生成纪要 → 抽取待办 → 导出 Markdown / HTML / Word</strong>。全程在本地跑，不联网、不依赖大模型服务。</p>
+<p>源码仓库：<a href="https://github.com/PetitroL/meetnotes">PetitroL/meetnotes</a></p>
+<p><img src="/images/meetnotes/ui-detail.png" alt="会议详情：左侧会议列表、中间逐字稿、右侧纪要/待办/导出"></p>
+
+<h2 id="why"><a href="#why" class="headerlink" title="why"></a>真正想解决的问题</h2>
+<p>开完会最烦的不是开会，是会后的半小时：把录音听完一遍、把谁说了什么记下来、把「下周把接口文档补齐」这种话从一堆闲聊里挑出来、再排成一份能发给领导的文档。</p>
+<p>这件事的难点不在「转成文字」，而在<strong>把非结构化的口水话变成结构化的交付物</strong>。所以我把整个流程拆成了几个彼此独立、每一步都能单独验证的环节，而不是一条黑箱流水线。</p>
+
+<h2 id="run"><a href="#run" class="headerlink" title="run"></a>三步跑起来</h2>
+<pre><code class="language-bash">npm install
+npm run build
+npm start          # http://localhost:5182
+</code></pre>
+<p>进去之后有三种开场：拖音频文件（mp3 / wav / m4a / webm，前端自动转 16k 单声道）、<strong>浏览器直接录</strong>、或者一键生成一场「产品评审会」的示例会议。第三种是为了让整条链路能被验证——不用去找录音，也能看到逐字稿怎么一段段冒出来、纪要怎么生成。</p>
+<p><img src="/images/meetnotes/ui-home.png" alt="首页：新建会议与拖拽上传"></p>
+
+<h2 id="stream"><a href="#stream" class="headerlink" title="stream"></a>转写：切块推进 + SSE 逐段显示</h2>
+<p>音频按 8 秒（3 分钟以内）或 20 秒切块，逐段推进。后端每完成一段就往 SSE 通道推一条 <code>segment</code>，前端边收边渲染，每段都能点回音频的对应位置。</p>
+<p>事件设计成 <code>snapshot / status / log / segment / done / failed / updated</code> 七种：<code>snapshot</code> 让刷新页面能接上进度，<code>status</code> 推进度条，<code>segment</code> 增量上屏，<code>updated</code> 表示某段被改过需要同步。这样「边转边看」不是一个假动画，而是真的在接收数据。</p>
+
+<h2 id="speaker"><a href="#speaker" class="headerlink" title="speaker"></a>说话人：两档可选，默认不装懂</h2>
+<p>这是我最不想含糊的一块，所以做了两个模式，让用户自己选：</p>
+<table>
+<thead>
+<tr>
+<th>模式</th>
+<th>做法</th>
+<th>适合</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>编号模式</td>
+<td>按转写稿自带的轮次标 A/B/C，不做声学判断</td>
+<td>最稳，会议记录里本来就有轮次</td>
+</tr>
+<tr>
+<td>声纹分离</td>
+<td>真的从声音里分人：每块估基频，在对数音高轴上聚类</td>
+<td>拿到一段没有轮次信息的录音时</td>
+</tr>
+</tbody>
+</table>
+<p>声纹分离的实现是这样：对每个音频块做自相关估基频（音高），取 <code>log(pitch)</code> 做一维 k-means，<strong>k 不写死</strong>，而是 2 到 maxK 逐个试，用轮廓系数挑最好的那个：</p>
+<pre><code class="language-js">const values = voiced.map((c) =&gt; Math.log(c.features.pitch));
+for (let k = 2; k &lt;= maxK; k += 1) {
+  const assign = kmeans1D(values, k);
+  const score = silhouette1D(values, assign, k);   // 轮廓系数
+  if (score &gt; best.score) best = { k, score, assign };
+}
+// 分得不够清楚就老老实实按单人处理
+if (!best.assign || best.score &lt; 0.15) {
+  return { labels: chunks.map(() =&gt; &quot;A&quot;), note: `音色差异不够明显…` };
+}
+</code></pre>
+<p><strong>为什么只用一维的基频，不做多维特征？</strong> 因为音色差异最直接的体现就是基频，而音量、清浊度这些受麦克风距离和增益影响极大，塞进来反而会把同一个人拆成两簇。维度少，可解释，出错也出得明白。</p>
+<p>静音块沿用上一段的标签，最后再做一次平滑去抖——否则一段换气就会被切成两个人。分错了也没关系，界面上能直接给说话人改名（「A → 张工」），改完纪要、待办、导出全部同步。</p>
+<p>这条链路里我刻意留了一句提示：<code>音色差异不够明显（轮廓系数 0.32），按单人处理</code>。<strong>算不出三声明显的三个人，就承认算不出来，而不是硬分成三个。</strong></p>
+<p><img src="/images/meetnotes/ui-transcribing.png" alt="转写进行中：进度与逐段输出"></p>
+
+<h2 id="minutes"><a href="#minutes" class="headerlink" title="minutes"></a>纪要：规则生成，所以每句都能回溯原文</h2>
+<p>不用模型改写，全部按规则挑句，原因很实在：<strong>纪要一旦被改写，就没法回溯到「谁在哪一句说的」</strong>。而会议纪要里最要命的就是「这话我没说过」。</p>
+<ul>
+<li><strong>摘要 3-5 条</strong>：按决策词、动作词、数字/时间三类信号给句子打分，挑够分的，按原始顺序排列——不打乱时间线；</li>
+<li><strong>议题 2-3 组</strong>：用六类主题词表打分归组，同一句话不会被塞进两个议题；</li>
+<li><strong>决议 1 条</strong>：按决策强度排序取最高分，<strong>同分取靠后的那一句</strong>——会议尾声才是真正拍板的地方。</li>
+</ul>
+<p>每条摘要、每条待办都挂着原句的段落索引，点一下能跳到逐字稿对应位置。我觉得这比「看起来很智能」重要得多。</p>
+
+<h2 id="todo"><a href="#todo" class="headerlink" title="todo"></a>待办：抽不到就少写，不硬凑</h2>
+<p>从逐字稿里抽「谁、做什么、什么时候」，靠三样东西：动作词、人称/岗位、截止时间表达。「已经做完了」的句子会被排除掉，避免把已完成的事列成待办。</p>
+<p>关键是<strong>宁可少写也不瞎补</strong>：抽不到时间就只写人和事，抽不到人就只写事，绝不自作主张补一个「本周五」。手改过的待办会被标记，重新计算时不会被冲掉。</p>
+
+<h2 id="docx"><a href="#docx" class="headerlink" title="docx"></a>Word 导出：零依赖手写 OOXML</h2>
+<p>这里我没装任何库。因为 <code>.docx</code> 本质就是一个 ZIP，里面装 OOXML——那就自己拼：</p>
+<pre><code class="language-js">// docx = [Content_Types].xml + _rels/.rels + word/document.xml + styles.xml
+const files = [
+  { name: &quot;[Content_Types].xml&quot;, data: Buffer.from(CONTENT_TYPES, &quot;utf8&quot;) },
+  { name: &quot;_rels/.rels&quot;,        data: Buffer.from(ROOT_RELS, &quot;utf8&quot;) },
+  { name: &quot;word/document.xml&quot;, data: Buffer.from(renderDocument(title, blocks), &quot;utf8&quot;) },
+  { name: &quot;word/styles.xml&quot;,   data: Buffer.from(STYLES, &quot;utf8&quot;) },
+];
+return zipStore(files);   // stored（不压缩）方式手写 ZIP，Word 完全认
+</code></pre>
+<p>三种导出各有用途：<strong>Markdown</strong> 贴进文档 / 飞书，<strong>HTML</strong> 是单文件自包含的，双击就能看且逐字稿默认折叠，<strong>Word</strong> 交给要存档的同事。另外还做了一个「复制 Markdown 到剪贴板」，省得为一段文本去下载文件。</p>
+
+<h2 id="verify"><a href="#verify" class="headerlink" title="verify"></a>怎么证明它真能跑</h2>
+<pre><code class="language-bash">npm run smoke
+</code></pre>
+<p>这个脚本会自己起服务、建会、跑声纹转写、改名、改段落、待办增删改、再把三种导出逐个校验字节和 MIME，最后删会收尾。当前 <strong>42/42 通过</strong>。</p>
+<p>我现在的习惯是：每个项目都要有一条「一条命令跑完整个链路」的冒烟测试。它不是给别人看的，是给自己改代码时兜底的——尤其是这种多阶段、带异步推送的流程，手动点一遍太容易漏。</p>
+
+<h2 id="limits"><a href="#limits" class="headerlink" title="limits"></a>已知取舍</h2>
+<ul>
+<li>会议存在<strong>内存</strong>里，重启清空（音频文件还在磁盘上）。接数据库是下一步。</li>
+<li>逐段之间的延迟是刻意的，为了让「边转边出」这条链路真的成立，不是性能问题。</li>
+<li>声纹分离是<strong>音色聚类</strong>，不是声纹库身份识别。同一人音色变化大时会分错，所以界面允许随时改名。</li>
+<li>只做单声道 16k 分析，多声道在前端先降成单声道。</li>
+<li>要接真实 ASR，配 <code>ASR_ENDPOINT</code> 与 <code>ASR_API_KEY</code> 即可；没配时走内置演示稿，<code>/api/health</code> 里的 <code>asr</code> 字段会告诉你是哪种来源。</li>
+</ul>
+
+<h2 id="end"><a href="#end" class="headerlink" title="end"></a>一点体会</h2>
+<p>这类工具最容易被做成「看起来很智能、实际不敢用」。我的取舍是：<strong>每一处判断都留出处，每一处不确定都明说</strong>。说话人分不准就提示「按单人处理」，待办抽不到就少写，纪要不用模型改写所以能回溯。把这些说清楚，比做得花哨更能让人敢用。</p>]]></content>
+  </entry>
+  <entry>
+    <title>给简历做一次体检：JD × 简历匹配到底该怎么打分</title>
+    <url>/2026/11/20/jobfit/</url>
+    <content><![CDATA[<p>找工作最耗时间的不是投简历，是判断「这份 JD 值不值得我花半小时改一版简历」。招聘网站给的那个百分比只会告诉你「匹配 78%」，从来不告诉你差在哪、能不能补、怎么补。</p>
+<p>所以我做了 JobFit：把一份 JD 和一份简历放进去，得到 <strong>0-100 的匹配分、五个维度的扣分原因、以及每条都能直接复制到简历里的改法</strong>。不投递、不外发，简历不出本机。</p>
+<p>源码仓库：<a href="https://github.com/PetitroL/jobfit">PetitroL/jobfit</a></p>
+<p><img src="/images/jobfit/ui-result.png" alt="分析结果：总分环、五维拆解、关键词对照、逐条建议"></p>
+
+<h2 id="purpose"><a href="#purpose" class="headerlink" title="purpose"></a>想把「差在哪」拆到能动手的程度</h2>
+<p>同样是「不匹配」，其实有三种完全不同的情况，处理方式天差地别：</p>
+<ul>
+<li>差的是<strong>硬门槛技能</strong>（JD 要 Kubernetes，你完全没有）→ 这个岗位现在够不着，别浪费时间；</li>
+<li>差的是<strong>表达</strong>（你做过，但简历里没写）→ 改一句话就能过筛，性价比最高；</li>
+<li>差的是<strong>级别</strong>（JD 要 8 年，你 7 年）→ 心里有数，面试时能聊。</li>
+</ul>
+<p>工具的价值不是给一个分数，而是把这三件事分开说清楚。</p>
+
+<h2 id="weights"><a href="#weights" class="headerlink" title="weights"></a>五个维度，100 分怎么分</p>
+<table>
+<thead>
+<tr>
+<th>维度</th>
+<th>满分</th>
+<th>怎么算</th>
+<th>为什么这么定</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>硬技能匹配</td>
+<td>40</td>
+<td>识别 JD 里提到的技能（46 个词条，带别名），按权重加权算命中比例；加分项最多再给 3 分</td>
+<td>技能是筛简历的第一道关。看<strong>加权比例</strong>而不是命中个数，避免「JD 提了 20 项你中了 10 项」被算成高分</td>
+</tr>
+<tr>
+<td>职责覆盖度</td>
+<td>20</td>
+<td>JD 正文切成中文 2-gram，去掉停用字与泛词，看简历覆盖了多少</td>
+<td>最容易被忽略的一维：技能全中但做过的事不一样，面试照样挂</td>
+</tr>
+<tr>
+<td>经验年限</td>
+<td>15</td>
+<td>解析 <code>3-5 年</code> / <code>3 年以上</code> / 中文数字，与简历年限比</td>
+<td>硬门槛；差一年给大半分，差太多直接扣完</td>
+</tr>
+<tr>
+<td>项目相关性</td>
+<td>15</td>
+<td>取 JD 里权重最高的技术，看它们有没有出现在项目描述里</td>
+<td>区分「简历上列了技能」和「真在项目里用过」——后者才是面试能讲的</td>
+</tr>
+<tr>
+<td>学历与加分项</td>
+<td>10</td>
+<td>学历分博士/硕士/本科/大专；JD 的加分项命中再加分</td>
+<td>学历是门槛不是竞争力，给太高会让真正的差距被稀释</td>
+</tr>
+</tbody>
+</table>
+<p>等级：<code>≥85 高度匹配 / 70-84 匹配度良好 / 55-69 可以投但需补强 / &lt;55 不建议盲投</code>。</p>
+
+<h2 id="calib"><a href="#calib" class="headerlink" title="calib"></a>关键是校准：分数必须有区分度</h2>
+<p>第一版跑出来，示例简历 99 分、真实简历 96 分、一份两年经验只会 jQuery 的简历 19 分。看起来「能用」，但 99 和 96 之间没有意义——<strong>如果强匹配一律 95+，这个分数就没有信息量了</strong>。</p>
+<p>调完之后（同一套代码，五组组合）：</p>
+<table>
+<thead>
+<tr>
+<th>JD × 简历</th>
+<th>总分</th>
+<th>结论</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>AI 前端 × 示例简历（虚构）</td>
+<td>95</td>
+<td>高度匹配</td>
+</tr>
+<tr>
+<td>AI 前端 × 真实简历（7 年前端）</td>
+<td>92</td>
+<td>高度匹配</td>
+</tr>
+<tr>
+<td>AI 前端 × 弱简历（2 年、大专、jQuery）</td>
+<td>19</td>
+<td>不建议盲投</td>
+</tr>
+<tr>
+<td>后端架构师 × 弱简历</td>
+<td>6</td>
+<td>不建议盲投</td>
+</tr>
+<tr>
+<td>后端架构师 × 真实简历（前端背景）</td>
+<td>28</td>
+<td>不建议盲投</td>
+</tr>
+</tbody>
+</table>
+<p>改了三处才算能用：</p>
+<p><strong>1. 覆盖度阈值从 55% 提到 70%。</strong> 55% 会让大部分「沾边」的简历都拿满分，这一维等于白算（<code>score = min(20, ratio/0.7*20)</code>）。</p>
+<p><strong>2. 项目维度在 JD 没有核心技能时给 8 分，不是白给 10 分。</strong> 原来给中性 10 分，结果一份完全不相关的前端简历去投后端岗，光这一项就拿 10 分。</p>
+<p><strong>3. 加分项上限从 4 分压到 3 分。</strong> 否则「堆加分」可以把硬技能的大缺口盖住。</p>
+
+<h2 id="coverage"><a href="#coverage" class="headerlink" title="coverage"></a>职责覆盖度：中文 2-gram 的坑</h2>
+<p>没有分词器，直接用中文 2-gram：把 JD 正文按非汉字切成块，每块取相邻两字成词，去掉停用字（的/了/和/在…）和泛词（负责/熟悉/相关/要求/经验/能力/团队…）之后，看这些特征词有多少出现在简历里。</p>
+<p>举一个真实例子：「负责 AI 对话类产品的前端研发」切出来的特征是 <code>对话 / 前端 / 研发</code> 这类词，「负责」「产品」因为太泛被丢掉。这样比对的才是<strong>做过什么事</strong>，而不是<strong>用了什么套话</strong>。</p>
+<p>这里踩了一个很蠢但很致命的坑：特征词筛选用的是这段正则——</p>
+<pre><code class="language-js">/^\u4e00-\u9fa5\u4e00-\u9fa5/.test(gram)   // 错的，缺字符类方括号
+</code></pre>
+<p>它永远不匹配，特征词数量恒为 0，于是覆盖度永远是 0 分。表现是：总分看着还行，但「职责覆盖」这一栏永远是 0/20，我一开始还以为阈值定太高。改成 <code>/^[\u4e00-\u9fa5]{2}$/</code> 才对。</p>
+
+<h2 id="skills"><a href="#skills" class="headerlink" title="skills"></a>技能词表：别名比想象中重要</h2>
+<p>匹配用「小写化后 <code>includes</code>」，<strong>不加词边界</strong>——中文里「Vue3 开发」加边界会漏识别。</p>
+<p>但别名的坑更多。第一版 <code>Go</code> 的别名只写了 <code>golang</code>，结果 JD 里那句「精通 Go 或 Java」识别不到 Go，一个硬门槛技能被漏掉。后来补成 <code>["golang", " go ", "go 语言", "go语言"]</code>，并顺手加了微服务、高并发、消息队列、Redis、K8s、分库分表、团队管理几项——不然一份后端 JD 的「缺失技能」会列得莫名其妙。</p>
+
+<h2 id="pdf"><a class="headerlink" title="pdf"></a>PDF 解析：两条路，都不出本机</h2>
+<p>简历来源做了两种：粘贴文本、上传 PDF。PDF 拖进来后在服务端转成文本回填到编辑框，<strong>可以先改错字再分析</strong>——OCR 和排版提取一定会有串行，直接拿结果去算分数是不负责的。</p>
+<p>解析走三段：</p>
+<ol>
+<li><strong>Python + PyMuPDF</strong>（主路径）：spawn 子进程跑 <code>scripts/pdf-text.py</code>，读回 JSON，超时 10 秒；</li>
+<li><strong>纯 Node 兜底</strong>：自己找 <code>stream…endstream</code>，<code>zlib.inflateSync</code> 解 FlateDecode，再抓 <code>(...)Tj</code> 与 <code>[...]TJ</code> 文本指令；</li>
+<li><strong>都失败</strong>：返回 422 并提示「请改用粘贴文本」，而不是给一个空结果让人以为分析成功。</li>
+</ol>
+<p>临时文件用 <code>mkdtemp</code> 建在系统临时目录，<code>finally</code> 里删干净。整条链路不联网，简历不离开这台机器。</p>
+
+<h2 id="advice"><a href="#advice" class="headerlink" title="advice"></a>建议：不编造经历</h2>
+<p>六类建议，按优先级排：缺硬门槛技能（按权重降序）、年限差距、职责覆盖缺口、项目相关性、学历与加分项、优势怎么讲（永远给一条，避免只批评不给出路）。</p>
+<p>核心原则写在代码注释里：<strong>不编造经历</strong>。每条建议都是两条路——</p>
+<pre><code>如果确实做过：在相关项目里加一句「[用 XX 做了什么 + 结果是什么（带数字）]」。
+如果没做过：花 1-2 天做一个能跑的最小例子，放进个人项目，面试时能讲清原理就够了。
+</code></pre>
+<p>这两句话比「建议补充 Kubernetes 经验」有用得多，因为后者等于没说。</p>
+<p>另外给了一块「可直接发送的匹配说明」，把命中的技能、待补项、经验学历、代表作和一句话结论拼成一段，投递时能直接当打招呼消息的第一段。每条建议也能单独复制，方便只取需要的那一句。</p>
+<p><img src="/images/jobfit/ui-empty.png" alt="空态：左边贴 JD，右边出结论"></p>
+
+<h2 id="run"><a href="#run" class="headerlink" title="run"></a>怎么跑起来</h2>
+<pre><code class="language-bash">npm install
+npm run build
+npm start          # http://localhost:5192
+</code></pre>
+<p>想直接看效果，开 <code>http://localhost:5192/#demo</code> 会自动填入一份虚构的示例 JD 和简历并跑完分析。冒烟测试 <code>npm run smoke</code> 覆盖 36 项：接口、参数校验、超长文本拦截、历史记录增删、PDF 边界（缺数据 / 非 PDF / 损坏文件返回 422）、页面可达。</p>
+<p>PDF 想稳定可用，建议装 Python 3 与 PyMuPDF（<code>python -m pip install pymupdf</code>）；没装也能跑，只是复杂排版的提取质量会下降。</p>
+
+<h2 id="limits"><a href="#limits" class="headerlink" title="limits"></a>已知限制</h2>
+<ul>
+<li><strong>只有中文</strong>：分词是中文 2-gram，纯英文材料效果会打折。</li>
+<li><strong>技能是词表匹配，不是语义理解</strong>：JD 写「要求熟悉服务端渲染」而词表里只有 SSR 就可能漏。词表在 <code>server/skills.js</code>，加一条是一分钟。</li>
+<li><strong>记录存在内存里</strong>，最多 20 条，且只留 300 字预览，重启清空——简历不该无声无息地堆在磁盘上。</li>
+<li>示例简历里的人物是虚构的，联系方式等字段刻意没写。</li>
+</ul>
+
+<h2 id="end"><a href="#end" class="headerlink" title="end"></a>一点体会</h2>
+<p>做完这个项目最深的感受是：<strong>打分容易，校准难</strong>。任何一套权重都能算出一个 0-100，但只有拿几份明显不同水平的简历去跑，才知道这套权重到底有没有分辨力。95 分和 92 分的差别没有意义，95 分和 19 分的差别才有。</p>
+<p>所以我把校准脚本一起留在了仓库里（<code>scripts/_calib.mjs</code>），改权重之后跑一遍、看五组结果有没有被压扁，比凭感觉调参数靠谱。</p>]]></content>
+  </entry>
+  <entry>
     <title>博客搭建以及博客美化</title>
     <url>/2021/12/02/hello-world/</url>
     <content><![CDATA[<h3 id="前言"><a href="#前言" class="headerlink" title="前言"></a>前言</h3><p>记录一下自己头一次真正使用typora写文章，此时小编的心情很是激动。</p>
